@@ -62,3 +62,5 @@ if "poller" not in st.session_state:
                 st.session_state.live=load_count(); st.rerun()
     threading.Thread(target=poll,daemon=True).start()
     st.session_state.poller=True
+
+st.write("secrets keys:", list(st.secrets.keys()))
