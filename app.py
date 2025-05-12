@@ -1,79 +1,115 @@
-import streamlit as st, time, firebase_admin, json, threading
+# app.py ─ デジタル肩たたき券（Firestore 版）
+# -------------------------------------------
+# ・残数は Firestore の tickets/count ドキュメントで共有
+# ・「1枚使う」で残数 -1 ＆ モーダルを開く
+# ・モーダルは「表示停止」ボタンで閉じるまで表示し続ける
+# ・管理者パスワードで +1 / -1 / 任意リセット UI
+# ・3 秒ポーリングで多端末リアルタイム同期
+# -------------------------------------------
+
+import streamlit as st
+import time, threading, json, firebase_admin
 from firebase_admin import credentials, firestore
 
 # ---------- Firestore 初期化 ----------
 if not firebase_admin._apps:
-    cred = credentials.Certificate(st.secrets)  # secrets.toml から読み取り
+    cred = credentials.Certificate(st.secrets)   # .streamlit/secrets.toml から読み取り
     firebase_admin.initialize_app(cred)
-db = firestore.client()
-DOC = db.collection("tickets").document("count")   # 1 ドキュメント運用
-DEFAULT = 10
 
-# ---------- Firestore 読み書き ----------
+db = firestore.client()
+DOC = db.collection("tickets").document("count")   # 単一ドキュメントを共有
+DEFAULT_COUNT = 10
+
 def load_count() -> int:
     snap = DOC.get()
-    return snap.to_dict()["count"] if snap.exists else DEFAULT
+    return snap.to_dict()["count"] if snap.exists else DEFAULT_COUNT
 
 def save_count(n: int) -> None:
     DOC.set({"count": n})
 
-# ---------- 管理者判定（超シンプル版） ----------
-ADMIN_PASS = "katatakimaster"        # ★お好みで変更／環境変数化
+# ---------- 管理者判定 ----------
+ADMIN_PASS = "katatakimaster"          # ★お好みで変更
 def is_admin() -> bool:
-    if "admin" in st.session_state:           # 既にログイン済み
+    if "admin" in st.session_state:
         return st.session_state.admin
     pw = st.sidebar.text_input("管理者パスワード", type="password")
     if pw == ADMIN_PASS:
         st.session_state.admin = True
-        st.experimental_rerun()
+        st.rerun()
     return False
 
-# ---------- UI ----------
-st.set_page_config(page_title="肩たたき券", layout="centered")
+# ---------- Streamlit ページ ----------
+st.set_page_config(page_title="デジタル肩たたき券", layout="centered")
 st.title("残り肩たたき券")
 
-# Firestore から取得（毎回最新値）
 count = load_count()
 st.markdown(f"<h1 style='font-size:5rem'>{count}</h1>", unsafe_allow_html=True)
 
-# --- ユーザー用ボタン ---
-if st.button("1枚使う", disabled=count <= 0):
-    save_count(count - 1)
-    st.session_state.show = True
-    st.experimental_rerun()
+# ---------- 「1枚使う」ボタン ----------
+def use_ticket():
+    current = load_count()
+    if current > 0:
+        save_count(current - 1)
+        st.session_state.show_modal = True
+        st.rerun()
 
-# --- 肩たたきタイム モーダル ---
-if st.session_state.get("show"):
-    st.markdown("""
-        <div style='position:fixed;inset:0;display:flex;
-        justify-content:center;align-items:center;background:#fff;z-index:1000'>
-          <h2 style='font-size:4rem'>肩たたきタイム!</h2>
-        </div>""", unsafe_allow_html=True)
-    time.sleep(2)
-    st.session_state.show = False
-    st.experimental_rerun()
+st.button("1枚使う", disabled=count <= 0, on_click=use_ticket)
 
-# --- 管理者 UI (⑤) ---
+# ---------- モーダル表示 ----------
+def close_modal():
+    st.session_state.show_modal = False
+    st.rerun()
+
+if st.session_state.get("show_modal"):
+    st.markdown(
+        """
+        <style>
+        .modal-overlay{
+          position:fixed;inset:0;background:#fff;
+          display:flex;flex-direction:column;
+          justify-content:center;align-items:center;
+          z-index:1000;
+        }
+        .modal-text{
+          font-family:"Hiragino Maru Gothic ProN","YuGothic",
+                       "Yu Gothic",sans-serif;
+          font-size:3.5rem;color:#000;margin-bottom:2rem;
+        }
+        </style>
+        <div class="modal-overlay">
+          <div class="modal-text">肩たたきタイム！</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.button("表示停止", on_click=close_modal)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------- 管理者 UI ----------
 if is_admin():
     st.sidebar.header("管理者メニュー")
     col1, col2 = st.sidebar.columns(2)
     if col1.button("+1"):
-        save_count(count + 1); st.experimental_rerun()
-    if col2.button("-1") and count > 0:
-        save_count(count - 1); st.experimental_rerun()
-
-    new_val = st.sidebar.number_input("任意の枚数にセット", min_value=0, value=count, step=1)
+        save_count(count + 1)
+        st.rerun()
+    if col2.button("-1", disabled=count <= 0):
+        save_count(count - 1)
+        st.rerun()
+    new_val = st.sidebar.number_input("任意の枚数にセット", value=count, min_value=0, step=1)
     if st.sidebar.button("リセット"):
-        save_count(int(new_val)); st.experimental_rerun()
+        save_count(int(new_val))
+        st.rerun()
 
-# --- 自動再読み込み (⑥) ---
-if "auto_update" not in st.session_state:
+# ---------- 自動再読み込み（ポーリング） ----------
+if "live_count" not in st.session_state:
+    st.session_state.live_count = count
+
+if "poller_started" not in st.session_state:
     def poll():
         while True:
-            time.sleep(3)                # 3 秒ごとに監視
+            time.sleep(3)
             latest = load_count()
-            if latest != st.session_state.get("live"):
-                st.session_state.live = latest
-                st.experimental_rerun()
-    st.session_state.live = count
+            if latest != st.session_state.get("live_count"):
+                st.session_state.live_count = latest
+                st.rerun()
     threading.Thread(target=poll, daemon=True).start()
+    st.session_state.poller_started = True
