@@ -1,5 +1,4 @@
-!pip -q install streamlit pyngrok
-%%writefile app.py
+
 import streamlit as st, json, time, pathlib
 FILE = pathlib.Path("count.json")
 if not FILE.exists():
