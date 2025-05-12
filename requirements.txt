@@ -1,4 +1,3 @@
 streamlit>=1.34
-firebase-admin==6.5.0
-google-cloud-firestore>=2.16
+
 
