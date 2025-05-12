@@ -27,12 +27,3 @@ if st.session_state.get("show"):
     time.sleep(2)
     st.session_state["show"]=False
     st.experimental_rerun()
-
-# ① Streamlit をバックグラウンド起動
-import subprocess, textwrap, time, os, signal, atexit
-proc = subprocess.Popen(["streamlit", "run", "app.py", "--server.port", "8501"])
-atexit.register(lambda: os.kill(proc.pid, signal.SIGTERM))  # ノート停止時に終了
-
-# ② 8501 番を外にトンネル
-public_url = ngrok.connect(8501, "http")
-print("▶ 公開 URL:", public_url)
