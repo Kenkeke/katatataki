@@ -1,66 +1,84 @@
-# app.py ─ Firestore 版（secrets を dict で受け取る簡易形）
+import json
+import pathlib
 import streamlit as st
-import time, threading
-import firebase_admin
-from firebase_admin import credentials, firestore
 
-# --- Firestore 初期化 ---
-cred = credentials.Certificate(dict(st.secrets))   # ← 変更
-if not firebase_admin._apps:
-    firebase_admin.initialize_app(cred)
+TICKET_FILE = pathlib.Path("tickets.json")
+ADMIN_PASS = st.secrets.get("ADMIN_PASSWORD", "admin")  # Streamlit Cloud の Secrets にセット推奨
+st.set_page_config(page_title="デジタル肩たたき券", page_icon="🎫", layout="centered")
 
-db = firestore.client()
-DOC = db.collection("tickets").document("count")
-DEFAULT = 10
 
-def load_count():  # ...
-    snap = DOC.get()
-    return snap.to_dict()["count"] if snap.exists else DEFAULT
+def load_count() -> int:
+    if TICKET_FILE.exists():
+        with TICKET_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return int(data.get("count", 0))
+    return 0
 
-def save_count(n): DOC.set({"count": n})
+def save_count(n: int) -> None:
+    with TICKET_FILE.open("w", encoding="utf-8") as f:
+        json.dump({"count": n}, f)
 
-# --- 管理者パスワード ---
-ADMIN_PASS = "katatakimaster"
-def is_admin():
-    if "admin" in st.session_state: return st.session_state.admin
-    if st.sidebar.text_input("管理者パス", type="password") == ADMIN_PASS:
-        st.session_state.admin = True; st.rerun()
-    return False
 
-# --- UI ---
-st.set_page_config("肩たたき券"); st.title("残り肩たたき券")
-count = load_count()
-st.markdown(f"<h1 style='font-size:5rem'>{count}</h1>", unsafe_allow_html=True)
+def admin_mode() -> None:
+    st.header("管理者モード 👩‍💻")
+    st.write("券の残数を自由に増減できます。")
 
-def use(): save_count(count-1); st.session_state.show=True; st.rerun()
-st.button("1枚使う", disabled=count<=0, on_click=use)
+    count = load_count()
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("➖ 1 枚減らす", disabled=count <= 0):
+            count -= 1
+    with col2:
+        if st.button("🔄 リセット (0)", type="secondary"):
+            count = 0
+    with col3:
+        add = st.number_input("追加する枚数", min_value=1, max_value=100, value=1, step=1, key="add_input")
+        if st.button("➕ 追加"):
+            count += int(add)
 
-if st.session_state.get("show"):
-    st.markdown("""<style>.modal{position:fixed;inset:0;background:#fff;
-    display:flex;justify-content:center;align-items:center;z-index:1000}
-    .txt{font-family:'Hiragino Maru Gothic ProN','YuGothic',sans-serif;
-    font-size:3.5rem;color:#000;margin-bottom:2rem}</style>
-    <div class="modal"><div class="txt">肩たたきタイム！</div>""",
-    unsafe_allow_html=True)
-    st.button("表示停止", on_click=lambda: (st.session_state.update(show=False), st.rerun()))
-    st.markdown("</div>", unsafe_allow_html=True)
+    save_count(count)
+    st.success(f"現在の残数: **{count} 枚**")
 
-if is_admin():
-    st.sidebar.header("管理者メニュー")
-    c1,c2=st.sidebar.columns(2)
-    if c1.button("+1"): save_count(count+1); st.rerun()
-    if c2.button("-1", disabled=count<=0): save_count(count-1); st.rerun()
-    n=st.sidebar.number_input("任意リセット", value=count, min_value=0, step=1)
-    if st.sidebar.button("リセット"): save_count(int(n)); st.rerun()
 
-# --- ポーリング ---
-if "poller" not in st.session_state:
-    def poll():
-        while True:
-            time.sleep(3)
-            if load_count()!=st.session_state.get("live", count):
-                st.session_state.live=load_count(); st.rerun()
-    threading.Thread(target=poll,daemon=True).start()
-    st.session_state.poller=True
+def user_mode() -> None:
+    st.header("デジタル肩たたき券 🎫")
+    count = load_count()
+    st.info(f"残り枚数: **{count} 枚**")
+    if count == 0:
+        st.warning("もう券がありません… 管理者に追加してもらってください。")
+        st.stop()
 
-st.write("secrets keys:", list(st.secrets.keys()))
+    if st.button("券を 1 枚使う"):
+        count -= 1
+        save_count(count)
+        st.switch_page("katatataki_time")  # ページ遷移
+
+
+def katatataki_time() -> None:
+    st.markdown(
+        """
+        <div style="height:90vh;display:flex;justify-content:center;align-items:center;background:#ffffff;">
+            <h1 style="font-size:4rem;color:#000000;">肩たたきタイム</h1>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("⬅️ 戻る"):
+        st.switch_page("app")  # トップへ
+
+
+page = st.query_params.get("page", "home")
+
+if page == "katatataki_time":
+    katatataki_time()
+else:
+    st.sidebar.title("モード選択")
+    mode = st.sidebar.radio("Choose Mode", ("ユーザー", "管理者"))
+    if mode == "管理者":
+        pwd = st.sidebar.text_input("パスワード", type="password")
+        if pwd == ADMIN_PASS:
+            admin_mode()
+        else:
+            st.error("パスワードが違います。")
+    else:
+        user_mode()
