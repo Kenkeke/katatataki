@@ -1,23 +1,24 @@
-# app.py ─ デジタル肩たたき券（Firestore 版）
-# -------------------------------------------
-# ・残数は Firestore の tickets/count ドキュメントで共有
-# ・「1枚使う」で残数 -1 ＆ モーダルを開く
-# ・モーダルは「表示停止」ボタンで閉じるまで表示し続ける
-# ・管理者パスワードで +1 / -1 / 任意リセット UI
+# app.py ─ デジタル肩たたき券（Firestore 版・完全動作）
+# --------------------------------------------------------
+# ・Firestore 1 ドキュメントで残数共有
+# ・モーダルは「表示停止」ボタンで閉じるまで表示
+# ・管理者パスワードで +1 / -1 / 任意リセット
 # ・3 秒ポーリングで多端末リアルタイム同期
-# -------------------------------------------
+# --------------------------------------------------------
 
 import streamlit as st
-import time, threading, json, firebase_admin
+import json, time, threading
+import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ---------- Firestore 初期化 ----------
+service_account_info = json.loads(st.secrets["service_account"])  # secrets.toml から JSON 文字列
+cred = credentials.Certificate(service_account_info)
 if not firebase_admin._apps:
-    cred = credentials.Certificate(st.secrets)   # .streamlit/secrets.toml から読み取り
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
-DOC = db.collection("tickets").document("count")   # 単一ドキュメントを共有
+DOC = db.collection("tickets").document("count")   # 単一ドキュメント
 DEFAULT_COUNT = 10
 
 def load_count() -> int:
@@ -27,8 +28,8 @@ def load_count() -> int:
 def save_count(n: int) -> None:
     DOC.set({"count": n})
 
-# ---------- 管理者判定 ----------
-ADMIN_PASS = "katatakimaster"          # ★お好みで変更
+# ---------- 管理者認証 ----------
+ADMIN_PASS = "katatakimaster"        # ★任意に変更
 def is_admin() -> bool:
     if "admin" in st.session_state:
         return st.session_state.admin
@@ -38,14 +39,14 @@ def is_admin() -> bool:
         st.rerun()
     return False
 
-# ---------- Streamlit ページ ----------
+# ---------- ページ設定 ----------
 st.set_page_config(page_title="デジタル肩たたき券", layout="centered")
 st.title("残り肩たたき券")
 
 count = load_count()
 st.markdown(f"<h1 style='font-size:5rem'>{count}</h1>", unsafe_allow_html=True)
 
-# ---------- 「1枚使う」ボタン ----------
+# ---------- ユーザーボタン ----------
 def use_ticket():
     current = load_count()
     if current > 0:
@@ -55,7 +56,7 @@ def use_ticket():
 
 st.button("1枚使う", disabled=count <= 0, on_click=use_ticket)
 
-# ---------- モーダル表示 ----------
+# ---------- モーダル ----------
 def close_modal():
     st.session_state.show_modal = False
     st.rerun()
@@ -71,8 +72,7 @@ if st.session_state.get("show_modal"):
           z-index:1000;
         }
         .modal-text{
-          font-family:"Hiragino Maru Gothic ProN","YuGothic",
-                       "Yu Gothic",sans-serif;
+          font-family:"Hiragino Maru Gothic ProN","YuGothic","Yu Gothic",sans-serif;
           font-size:3.5rem;color:#000;margin-bottom:2rem;
         }
         </style>
@@ -87,19 +87,16 @@ if st.session_state.get("show_modal"):
 # ---------- 管理者 UI ----------
 if is_admin():
     st.sidebar.header("管理者メニュー")
-    col1, col2 = st.sidebar.columns(2)
-    if col1.button("+1"):
-        save_count(count + 1)
-        st.rerun()
-    if col2.button("-1", disabled=count <= 0):
-        save_count(count - 1)
-        st.rerun()
+    c1, c2 = st.sidebar.columns(2)
+    if c1.button("+1"):
+        save_count(count + 1); st.rerun()
+    if c2.button("-1", disabled=count <= 0):
+        save_count(count - 1); st.rerun()
     new_val = st.sidebar.number_input("任意の枚数にセット", value=count, min_value=0, step=1)
     if st.sidebar.button("リセット"):
-        save_count(int(new_val))
-        st.rerun()
+        save_count(int(new_val)); st.rerun()
 
-# ---------- 自動再読み込み（ポーリング） ----------
+# ---------- ポーリングで同期 ----------
 if "live_count" not in st.session_state:
     st.session_state.live_count = count
 
@@ -108,7 +105,7 @@ if "poller_started" not in st.session_state:
         while True:
             time.sleep(3)
             latest = load_count()
-            if latest != st.session_state.get("live_count"):
+            if latest != st.session_state.live_count:
                 st.session_state.live_count = latest
                 st.rerun()
     threading.Thread(target=poll, daemon=True).start()
