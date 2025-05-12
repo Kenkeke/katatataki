@@ -28,9 +28,6 @@ if st.session_state.get("show"):
     st.session_state["show"]=False
     st.experimental_rerun()
 
-from pyngrok import ngrok
-ngrok.set_auth_token("2wzthvdd3pm3oR7ava3Q5M7eszB_4P4peACMMEpYNJ58tZGam")
-
 # ① Streamlit をバックグラウンド起動
 import subprocess, textwrap, time, os, signal, atexit
 proc = subprocess.Popen(["streamlit", "run", "app.py", "--server.port", "8501"])
