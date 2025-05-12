@@ -12,7 +12,7 @@ import pathlib
 
 # ---------- 設定 ----------
 FILE = pathlib.Path("count.json")   # 残数保存ファイル
-DEFAULT_COUNT = 10                 # 初期枚数
+DEFAULT_COUNT = 30                 # 初期枚数
 
 # ---------- 残数の永続化 ----------
 if not FILE.exists():
