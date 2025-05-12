@@ -1,87 +1,79 @@
-# app.py － デジタル肩たたき券（ローカル JSON 版）
-# -----------------------------------------------
-# ・残数を JSON ファイルに保存
-# ・「1枚使う」で残数 -1 ＆ モーダルを開く
-# ・モーダルは「表示停止」ボタンを押すまで表示
-# ・フォントは丸ゴシック寄り、文字色は黒、背景は白
-# -----------------------------------------------
+import streamlit as st, time, firebase_admin, json, threading
+from firebase_admin import credentials, firestore
 
-import streamlit as st
-import json
-import pathlib
+# ---------- Firestore 初期化 ----------
+if not firebase_admin._apps:
+    cred = credentials.Certificate(st.secrets)  # secrets.toml から読み取り
+    firebase_admin.initialize_app(cred)
+db = firestore.client()
+DOC = db.collection("tickets").document("count")   # 1 ドキュメント運用
+DEFAULT = 10
 
-# ---------- 設定 ----------
-FILE = pathlib.Path("count.json")   # 残数保存ファイル
-DEFAULT_COUNT = 30                 # 初期枚数
-
-# ---------- 残数の永続化 ----------
-if not FILE.exists():
-    FILE.write_text(json.dumps({"count": DEFAULT_COUNT}, ensure_ascii=False))
-
-
+# ---------- Firestore 読み書き ----------
 def load_count() -> int:
-    """現在の枚数を読み込む"""
-    return json.loads(FILE.read_text())["count"]
-
+    snap = DOC.get()
+    return snap.to_dict()["count"] if snap.exists else DEFAULT
 
 def save_count(n: int) -> None:
-    """枚数を保存する"""
-    FILE.write_text(json.dumps({"count": n}, ensure_ascii=False))
+    DOC.set({"count": n})
 
+# ---------- 管理者判定（超シンプル版） ----------
+ADMIN_PASS = "katatakimaster"        # ★お好みで変更／環境変数化
+def is_admin() -> bool:
+    if "admin" in st.session_state:           # 既にログイン済み
+        return st.session_state.admin
+    pw = st.sidebar.text_input("管理者パスワード", type="password")
+    if pw == ADMIN_PASS:
+        st.session_state.admin = True
+        st.experimental_rerun()
+    return False
 
-# ---------- Streamlit ページ設定 ----------
-st.set_page_config(page_title="デジタル肩たたき券", layout="centered")
+# ---------- UI ----------
+st.set_page_config(page_title="肩たたき券", layout="centered")
 st.title("残り肩たたき券")
 
+# Firestore から取得（毎回最新値）
 count = load_count()
 st.markdown(f"<h1 style='font-size:5rem'>{count}</h1>", unsafe_allow_html=True)
 
-# ---------- ボタン：1 枚消費 ----------
-def use_ticket():
-    current = load_count()
-    if current > 0:
-        save_count(current - 1)
-        st.session_state["show_modal"] = True      # モーダルを開く
-        st.rerun()                                 # 画面を再描画
+# --- ユーザー用ボタン ---
+if st.button("1枚使う", disabled=count <= 0):
+    save_count(count - 1)
+    st.session_state.show = True
+    st.experimental_rerun()
 
+# --- 肩たたきタイム モーダル ---
+if st.session_state.get("show"):
+    st.markdown("""
+        <div style='position:fixed;inset:0;display:flex;
+        justify-content:center;align-items:center;background:#fff;z-index:1000'>
+          <h2 style='font-size:4rem'>肩たたきタイム!</h2>
+        </div>""", unsafe_allow_html=True)
+    time.sleep(2)
+    st.session_state.show = False
+    st.experimental_rerun()
 
-st.button("1枚使う", disabled=count <= 0, on_click=use_ticket)
+# --- 管理者 UI (⑤) ---
+if is_admin():
+    st.sidebar.header("管理者メニュー")
+    col1, col2 = st.sidebar.columns(2)
+    if col1.button("+1"):
+        save_count(count + 1); st.experimental_rerun()
+    if col2.button("-1") and count > 0:
+        save_count(count - 1); st.experimental_rerun()
 
-# ---------- モーダルの表示 ----------
-def close_modal():
-    st.session_state["show_modal"] = False        # モーダルを閉じる
-    st.rerun()
+    new_val = st.sidebar.number_input("任意の枚数にセット", min_value=0, value=count, step=1)
+    if st.sidebar.button("リセット"):
+        save_count(int(new_val)); st.experimental_rerun()
 
-
-if st.session_state.get("show_modal"):
-    st.markdown(
-        """
-        <style>
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: #ffffff;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-        .modal-text {
-            font-family: "Hiragino Maru Gothic ProN", "YuGothic",
-                         "Yu Gothic", "sans-serif";
-            font-size: 3.5rem;
-            color: #000000;
-            margin-bottom: 2rem;
-        }
-        </style>
-        <div class="modal-overlay">
-            <div class="modal-text">肩たたきタイム！</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # モーダル内の「表示停止」ボタン
-    st.button("表示停止", on_click=close_modal)
-    st.markdown("</div>", unsafe_allow_html=True)
-
+# --- 自動再読み込み (⑥) ---
+if "auto_update" not in st.session_state:
+    def poll():
+        while True:
+            time.sleep(3)                # 3 秒ごとに監視
+            latest = load_count()
+            if latest != st.session_state.get("live"):
+                st.session_state.live = latest
+                st.experimental_rerun()
+    st.session_state.live = count
+    threading.Thread(target=poll, daemon=True).start()
